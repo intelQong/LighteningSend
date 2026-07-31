@@ -2,7 +2,6 @@
 
 Transfer files between two devices with no network, using animated QR codes: one screen displays them, the other's camera reads them.
 
-Live at [lightsend.intelqong.link](https://lightsend.intelqong.link).
 
 This is a fork of [mohankumarelec/airgapped-qr-code-transfer](https://github.com/mohankumarelec/airgapped-qr-code-transfer), rewritten with zero third-party CDNs, native gzip streams instead of pako, raw binary QR frames, and CRC32-checked transfers.
 
