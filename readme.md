@@ -1,111 +1,63 @@
-# Airgapped QR Code Transfer Web App
+# LighteningSend
 
-Airgapped QR Code Transfer is a simple web-based tool to transfer data between devices using QR codes. It allows for the transfer of files without the need for network connectivity, leveraging QR codes to encode and decode file data. This project uses Vue.js for the frontend and libraries like pako for compression, qrcode.js for QR code generation, and zbar-wasm for QR code scanning.
+Transfer files between two devices with no network, using animated QR codes: one screen displays them, the other's camera reads them.
 
-[![Open in Flexpilot AI Web IDE](https://badges.flexpilot.ai/open-in-web-ide.svg)](https://flexpilot.ai/web-ide-redirect?provider=github&owner=mohankumarelec&repo=airgapped-qr-code-transfer&branch=master)
+Live at [lighteningsend.intelqong.link](https://lighteningsend.intelqong.link).
 
-## Live Online Demo
+This is a fork of [mohankumarelec/airgapped-qr-code-transfer](https://github.com/mohankumarelec/airgapped-qr-code-transfer), rewritten with zero third-party CDNs, native gzip streams instead of pako, raw binary QR frames, and CRC32-checked transfers.
 
-1. **Receiver Setup:**
-   - Open <a href="https://airgapped-qr-code-transfer.mohanram.co.in/scanner" target="_blank">scanner.html</a> in the receiver's browser.
-   - Allow access to the camera for scanning.
+## How it works
 
-2. **Sender Setup:**
-   - Open <a href="https://airgapped-qr-code-transfer.mohanram.co.in/generator" target="_blank">generator.html</a> in the sender's browser.
-   - Upload the file that needs to be transferred.
+A single page at the root URL, with two modes: **Send** and **Receive**.
 
-3. **Transfer Process:**
-   - Click the "Start Receiver" button in the receiver's browser and point it to the sender's screen.
-   - In the sender's browser, click "Choose file" and then click "Start Transfer."
-   - Wait for all parts to be transferred. The file will be downloaded on the receiver's device.
+- **Send**: pick a file. It's gzipped with the browser's native `CompressionStream`, split into chunks, and each chunk is encoded as a QR code carrying raw binary (QR byte mode — no base64 overhead). The sender loops the frame sequence forever.
+- **Receive**: point the camera at the sender's screen. Frames are collected in any order; each chunk only needs to be seen once, so a missed frame is just picked up on the next loop. There's no restarting a transfer.
+- Every data frame carries a CRC32, so a bad camera read is dropped rather than accepted. The full compressed stream carries its own CRC32 too, checked before the file is written to disk.
+- Two tuning knobs on the send side: chunk size (QR density) and frames per second. Lower both if the receiver is struggling to keep up.
+- Received filenames are sanitised, and decompression is capped to guard against decompression bombs.
 
-## Features
+## Dependencies
 
-- **Data Sender Mode**: Allows a user to select a file, compress it, and transfer it via QR codes.
-- **Data Receiver Mode**: Allows a user to scan QR codes to receive and reconstruct the file.
-- **File Compression**: Uses gzip compression to reduce the size of the data being transferred.
-- **QR Code Generation and Scanning**: Uses qrcode.js for generation and zbar-wasm for scanning QR codes.
+Fully vendored under `vendor/` — no CDNs, works offline (open it from a USB stick):
 
-## Getting Started
+- [qrcode-generator](https://github.com/kazuhikoarase/qrcode-generator) 1.4.4 — QR encoding
+- [@undecaf/zbar-wasm](https://github.com/undecaf/zbar-wasm) 0.11.0 — QR decoding (WebAssembly)
 
-### Prerequisites
+Compression/decompression uses the browser-native `CompressionStream` / `DecompressionStream` gzip APIs. No pako.
 
-- A modern web browser (preferably Chrome or Firefox) that supports JavaScript and the WebRTC API.
+## Browser requirements
 
-### Installing
+Needs `CompressionStream` and WebAssembly:
 
-1. Clone the repository:
+- Chrome/Edge 103+
+- Safari 16.4+ (iOS 16.4+)
+- Firefox 113+
+
+Camera access requires HTTPS (or `localhost`).
+
+## Files
+
+- `index.html` — the app
+- `app.js`, `app.css` — logic and styling
+- `vendor/` — vendored dependencies
+- `_headers` — Cloudflare Pages security headers
+- `test.mjs` — protocol self-check: `node test.mjs`
+- `test.html` — QR encode/decode round-trip check; serve the directory and open it in a browser
+
+## Deployment
+
+Static site, no build step. Deployed to Cloudflare Pages:
 
 ```sh
-git clone https://github.com/mohankumarelec/airgap-qr-transfer.git
-cd airgap-qr-transfer
+npx wrangler pages deploy . --project-name=lighteningsend
 ```
-
-2. Open the `generator.html` file in your browser for the sender interface:
-
-```sh
-open generator.html
-```
-
-3. Open the `scanner.html` file in your browser for the receiver interface:
-
-```sh
-open scanner.html
-```
-
-## Usage
-
-### Data Sender Mode
-
-1. Open `generator.html` in your browser.
-2. Select a file using the file input.
-3. Click the "Start Transfer" button to begin the transfer process.
-4. The application will compress the file, split it into chunks, and generate QR codes for each chunk.
-5. The generated QR codes will be displayed one by one, which can be scanned by the receiving device.
-
-### Data Receiver Mode
-
-1. Open `scanner.html` in your browser.
-2. Click the "Start Receiver" button to begin the receiving process.
-3. Use the device's camera to scan the QR codes generated by the sender.
-4. The application will decode the QR codes, reconstruct the file, and prompt you to download it once the transfer is complete.
-
-## How It Works
-
-### Data Sender (generator.html)
-
-1. **File Selection**: User selects a file from their device.
-2. **Compression**: The file is compressed using the pako library.
-3. **Chunking**: The compressed file is split into smaller chunks.
-4. **QR Code Generation**: Each chunk is encoded into a QR code using qrcode.js.
-5. **Display QR Codes**: The QR codes are displayed sequentially for the receiver to scan.
-
-### Data Receiver (scanner.html)
-
-1. **QR Code Scanning**: The device's camera scans QR codes using zbar-wasm.
-2. **Decoding**: Each QR code is decoded to extract the chunk of data.
-3. **Reconstruction**: The chunks are reassembled into the original compressed file.
-4. **Decompression**: The file is decompressed using pako.
-5. **File Download**: The reconstructed file is made available for download.
-
-## Contributing
-
-Contributions are welcome! Please follow these steps:
-
-1. Fork the repository.
-2. Create a new branch (`git checkout -b feature-branch`).
-3. Make your changes.
-4. Commit your changes (`git commit -am 'Add new feature'`).
-5. Push to the branch (`git push origin feature-branch`).
-6. Create a new Pull Request.
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+MIT — see [LICENSE](LICENSE).
 
-## Acknowledgments
+## Credits
 
-- [Vue.js](https://vuejs.org/) - JavaScript framework for building user interfaces.
-- [pako](https://github.com/nodeca/pako) - Compression library.
-- [qrcode.js](https://github.com/davidshimjs/qrcodejs) - QR code generation library.
-- [zbar-wasm](https://github.com/undecaf/zbar-wasm) - QR code scanning library.
+- [mohankumarelec/airgapped-qr-code-transfer](https://github.com/mohankumarelec/airgapped-qr-code-transfer) — upstream project this was forked from.
+- [qrcode-generator](https://github.com/kazuhikoarase/qrcode-generator) — MIT License.
+- [@undecaf/zbar-wasm](https://github.com/undecaf/zbar-wasm) — LGPL-2.1 License.

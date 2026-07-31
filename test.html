@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>LighteningSend — self-check</title>
+    <link rel="stylesheet" href="app.css" />
+  </head>
+  <body>
+    <main>
+      <h1>Self-check</h1>
+      <p class="status">
+        Verifies the assumption the whole design rests on: QR byte mode carries bytes
+        0x00&ndash;0xFF unchanged, and zbar hands them back without charset mangling.
+      </p>
+      <pre id="out" class="status"></pre>
+    </main>
+
+    <script src="vendor/qrcode.js"></script>
+    <script type="module">
+      import { buildHeader, buildData, parseFrame, crc32 } from "./app.js";
+      import { scanRGBABuffer } from "./vendor/zbar.mjs";
+
+      const out = document.getElementById("out");
+      const log = (line) => (out.textContent += line + "\n");
+      let failed = 0;
+      const check = (cond, label) => {
+        if (!cond) failed++;
+        log(`${cond ? "ok  " : "FAIL"}  ${label}`);
+      };
+
+      // Render a frame to an RGBA buffer, exactly as the sender's canvas would.
+      function render(frame, scale = 4, quiet = 4) {
+        let s = "";
+        for (let i = 0; i < frame.length; i += 4096) {
+          s += String.fromCharCode.apply(null, frame.subarray(i, i + 4096));
+        }
+        const qr = qrcode(0, "L");
+        qr.addData(s, "Byte");
+        qr.make();
+        const n = qr.getModuleCount();
+        const size = (n + quiet * 2) * scale;
+        const px = new Uint8ClampedArray(size * size * 4).fill(255);
+        for (let r = 0; r < n; r++) {
+          for (let c = 0; c < n; c++) {
+            if (!qr.isDark(r, c)) continue;
+            for (let y = 0; y < scale; y++) {
+              for (let x = 0; x < scale; x++) {
+                const o = (((r + quiet) * scale + y) * size + (c + quiet) * scale + x) * 4;
+                px[o] = px[o + 1] = px[o + 2] = 0;
+              }
+            }
+          }
+        }
+        return { px, size, version: (n - 17) / 4 };
+      }
+
+      check(crc32(new TextEncoder().encode("123456789")) === 0xcbf43926, "crc32 check value");
+
+      const cases = [
+        ["header frame, non-ASCII name", buildHeader("réçu ⚡.bin", 999999, 1302, 768, 0x89abcdef)],
+        ["all 256 byte values", buildData(7, Uint8Array.from({ length: 256 }, (_, i) => i))],
+        ["768 B (default density)", buildData(1, Uint8Array.from({ length: 768 }, (_, i) => (i * 31) & 0xff))],
+        ["2048 B (max density)", buildData(65535, Uint8Array.from({ length: 2048 }, (_, i) => (i * 97) & 0xff))],
+      ];
+
+      for (const [label, frame] of cases) {
+        const { px, size, version } = render(frame);
+        const [sym] = await scanRGBABuffer(px.buffer, size, size);
+        if (!sym) {
+          check(false, `${label} — zbar decoded nothing`);
+          continue;
+        }
+        const bytes = new Uint8Array(sym.data.buffer.slice(0));
+        const identical = bytes.length === frame.length && bytes.every((b, i) => b === frame[i]);
+        check(identical, `${label} — ${frame.length} B survived QR v${version} round trip`);
+        check(parseFrame(bytes) !== null, `${label} — decoded frame passes CRC`);
+      }
+
+      // A flipped bit must never be accepted as valid data.
+      const good = buildData(42, Uint8Array.from([1, 2, 3, 250, 251, 252]));
+      let caught = 0;
+      for (let i = 0; i < good.length; i++) {
+        const bad = good.slice();
+        bad[i] ^= 0x01;
+        if (parseFrame(bad) === null) caught++;
+      }
+      check(caught === good.length, `all ${good.length} single-bit corruptions rejected`);
+
+      log("");
+      log(failed ? `${failed} FAILED` : "all passed");
+      document.title = failed ? "FAILED" : "passed";
+    </script>
+  </body>
+</html>
