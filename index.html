@@ -63,23 +63,27 @@
           <span class="field-label" id="density-label">QR density</span>
           <div class="chips" role="radiogroup" aria-labelledby="density-label">
             <label class="chip">
-              <input type="radio" name="density" value="384" />
-              <span>Low</span>
+              <input type="radio" name="density" value="64" />
+              <span>Safest</span>
             </label>
             <label class="chip">
-              <input type="radio" name="density" value="768" checked />
-              <span>Medium</span>
+              <input type="radio" name="density" value="384" checked />
+              <span>Balanced</span>
+            </label>
+            <label class="chip">
+              <input type="radio" name="density" value="768" />
+              <span>Fast</span>
             </label>
             <label class="chip">
               <input type="radio" name="density" value="1280" />
-              <span>High</span>
-            </label>
-            <label class="chip">
-              <input type="radio" name="density" value="2048" />
-              <span>Max</span>
+              <span>Fastest</span>
             </label>
           </div>
-          <p class="field-hint">Denser codes move more per frame. Drop down a step if the camera struggles.</p>
+          <p class="field-hint">
+            Balanced scans from arm's length. Fast and Fastest move more per frame but
+            need the camera closer. If nothing is arriving, step down — Safest reads on a
+            poor camera at a distance, slowly.
+          </p>
         </div>
 
         <div class="field">

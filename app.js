@@ -306,7 +306,9 @@ export class Fountain {
 const $ = (id) => document.getElementById(id);
 
 function drawQR(canvas, frame) {
-  const qr = qrcode(0, "L"); // auto version, low EC — payload already CRC-guarded
+  // Error correction M, not L. The CRC only *detects* a bad read; the QR's own
+  // error correction is what lets a frame decode at all through blur and glare.
+  const qr = qrcode(0, "M");
   qr.addData(bytesToLatin1(frame), "Byte");
   qr.make();
 
