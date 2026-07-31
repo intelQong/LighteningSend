@@ -332,6 +332,7 @@ function initSend() {
   const btn = $("send-btn");
   const status = $("send-status");
   const canvas = $("qr");
+  const stage = $("qr-stage");
   const fps = $("fps");
   const fpsOut = $("fps-out");
   let running = false;
@@ -340,12 +341,13 @@ function initSend() {
 
   fileInput.addEventListener("change", () => {
     const f = fileInput.files[0];
-    fileLabel.textContent = f ? `${f.name} — ${humanSize(f.size)}` : "Choose a file…";
+    fileLabel.textContent = f ? `${f.name} · ${humanSize(f.size)}` : "Choose a file";
     btn.disabled = !f;
   });
 
   const stop = () => {
     running = false;
+    stage.hidden = true;
     btn.textContent = "Start transfer";
     fileInput.disabled = false;
   };
@@ -363,7 +365,7 @@ function initSend() {
     let comp, blocks, chunkSize, chunkCount, header;
     try {
       comp = await gzip(await file.arrayBuffer());
-      chunkSize = Number($("chunk-size").value);
+      chunkSize = Number(document.querySelector('input[name="density"]:checked').value);
       chunkCount = Math.max(1, Math.ceil(comp.length / chunkSize));
       if (chunkCount > MAX_CHUNKS) {
         throw new Error(
@@ -415,6 +417,7 @@ function initSend() {
       }
       try {
         drawQR(canvas, frame);
+        stage.hidden = false;
       } catch (err) {
         status.textContent = `QR encode failed: ${err.message}. Lower the QR density.`;
         return stop();
@@ -442,7 +445,9 @@ function initReceive() {
   const status = $("recv-status");
   const bar = $("recv-bar");
   const map = $("recv-map");
+  const progress = $("recv-progress");
   const video = $("video");
+  const viewfinder = $("viewfinder");
   let stream = null;
   let running = false;
 
@@ -459,10 +464,12 @@ function initReceive() {
     framesSeen = 0;
     bar.style.width = "0%";
     map.width = 1;
+    progress.hidden = true;
   };
 
   const paintMap = () => {
     if (!meta) return;
+    progress.hidden = false;
     const cols = Math.ceil(Math.sqrt(meta.chunkCount));
     const rows = Math.ceil(meta.chunkCount / cols);
     const cell = Math.max(2, Math.floor(360 / cols));
@@ -471,9 +478,12 @@ function initReceive() {
       map.height = rows * cell;
     }
     const ctx = map.getContext("2d");
+    const css = getComputedStyle(document.documentElement);
+    const on = css.getPropertyValue("--received");
+    const off = css.getPropertyValue("--pending");
     ctx.clearRect(0, 0, map.width, map.height);
     for (let i = 0; i < meta.chunkCount; i++) {
-      ctx.fillStyle = fountain.solved.has(i) ? "#4ade80" : "#2b3245";
+      ctx.fillStyle = fountain.solved.has(i) ? on : off;
       ctx.fillRect((i % cols) * cell, Math.floor(i / cols) * cell, cell - 1, cell - 1);
     }
     bar.style.width = `${(fountain.solved.size / meta.chunkCount) * 100}%`;
@@ -484,6 +494,7 @@ function initReceive() {
     stream?.getTracks().forEach((t) => t.stop());
     stream = null;
     video.srcObject = null;
+    viewfinder.hidden = true;
     btn.textContent = "Start camera";
   };
 
@@ -576,6 +587,7 @@ function initReceive() {
       return;
     }
     video.srcObject = stream;
+    viewfinder.hidden = false;
     await video.play().catch(() => {});
     running = true;
     btn.textContent = "Stop";

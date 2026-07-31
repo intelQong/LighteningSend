@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <meta name="color-scheme" content="dark light" />
+    <meta name="color-scheme" content="light dark" />
     <meta name="referrer" content="no-referrer" />
     <title>LighteningSend</title>
     <link rel="stylesheet" href="app.css" />
@@ -11,62 +11,95 @@
   </head>
 
   <body>
-    <header>
-      <h1>Lightening<span>Send</span></h1>
-      <nav role="tablist" aria-label="Mode">
-        <button id="tab-send" role="tab" aria-controls="panel-send" aria-selected="true">Send</button>
-        <button id="tab-recv" role="tab" aria-controls="panel-recv" aria-selected="false">Receive</button>
-      </nav>
+    <header class="app-bar">
+      <div class="wordmark">
+        <svg class="mark" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M13 2 4.5 13.2a.7.7 0 0 0 .56 1.12H10l-1 7.68 8.5-11.2a.7.7 0 0 0-.56-1.12H12z" />
+        </svg>
+        <span>LighteningSend</span>
+      </div>
+
+      <div class="segmented" role="tablist" aria-label="Mode">
+        <button id="tab-send" role="tab" aria-controls="panel-send" aria-selected="true">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V4l16 8Zm2-3 8.5-5L6 7v3.5l5 1.5-5 1.5Z" /></svg>
+          Send
+        </button>
+        <button id="tab-recv" role="tab" aria-controls="panel-recv" aria-selected="false">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 17a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm-8 3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h2.9l1.7-2h6.8l1.7 2H20a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2Z" /></svg>
+          Receive
+        </button>
+      </div>
     </header>
 
     <main>
       <!-- ---------------------------------------------------------- SEND -->
       <section id="panel-send" role="tabpanel" aria-labelledby="tab-send">
-        <div class="controls">
-          <label class="file">
-            <input type="file" id="file-input" />
-            <span id="file-label">Choose a file…</span>
-          </label>
+        <label class="dropzone" for="file-input">
+          <input type="file" id="file-input" />
+          <svg class="dropzone-icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M11 16V7.8l-2.6 2.6L7 9l5-5 5 5-1.4 1.4L13 7.8V16Zm-5 4a2 2 0 0 1-2-2v-3h2v3h12v-3h2v3a2 2 0 0 1-2 2Z" />
+          </svg>
+          <span id="file-label" class="dropzone-label">Choose a file</span>
+          <span class="dropzone-hint">Nothing is uploaded. The other screen reads it through the camera.</span>
+        </label>
 
-          <div class="knobs">
-            <label>
-              QR density
-              <select id="chunk-size">
-                <option value="384">Low &middot; 384 B</option>
-                <option value="768" selected>Medium &middot; 768 B</option>
-                <option value="1280">High &middot; 1280 B</option>
-                <option value="2048">Max &middot; 2048 B</option>
-              </select>
+        <div class="field">
+          <span class="field-label" id="density-label">QR density</span>
+          <div class="chips" role="radiogroup" aria-labelledby="density-label">
+            <label class="chip">
+              <input type="radio" name="density" value="384" />
+              <span>Low</span>
             </label>
-            <label>
-              Speed <output id="fps-out">8</output> fps
-              <input type="range" id="fps" min="1" max="20" step="1" value="8" />
+            <label class="chip">
+              <input type="radio" name="density" value="768" checked />
+              <span>Medium</span>
+            </label>
+            <label class="chip">
+              <input type="radio" name="density" value="1280" />
+              <span>High</span>
+            </label>
+            <label class="chip">
+              <input type="radio" name="density" value="2048" />
+              <span>Max</span>
             </label>
           </div>
-
-          <button id="send-btn" class="primary" disabled>Start transfer</button>
+          <p class="field-hint">Denser codes move more per frame. Drop down a step if the camera struggles.</p>
         </div>
 
+        <div class="field">
+          <label class="field-label" for="fps">Speed <output id="fps-out">8</output> fps</label>
+          <input type="range" id="fps" min="1" max="20" step="1" value="8" />
+        </div>
+
+        <button id="send-btn" class="filled" disabled>Start transfer</button>
         <p id="send-status" class="status" role="status">Pick a file to get started.</p>
-        <canvas id="qr" width="512" height="512" aria-label="QR code frame"></canvas>
+
+        <div class="stage" id="qr-stage" hidden>
+          <canvas id="qr" width="512" height="512" aria-label="QR code frame"></canvas>
+        </div>
       </section>
 
       <!-- ------------------------------------------------------- RECEIVE -->
       <section id="panel-recv" role="tabpanel" aria-labelledby="tab-recv" hidden>
-        <div class="controls">
-          <button id="recv-btn" class="primary">Start camera</button>
+        <button id="recv-btn" class="filled">Start camera</button>
+        <p id="recv-status" class="status" role="status">
+          Point your camera at the sending screen. Frames can arrive in any order.
+        </p>
+
+        <div class="progress" id="recv-progress" hidden>
+          <div class="track"><div id="recv-bar"></div></div>
+          <canvas id="recv-map" class="mosaic" width="1" height="1" aria-label="Blocks received"></canvas>
         </div>
 
-        <p id="recv-status" class="status" role="status">Point this camera at the sender's screen.</p>
-        <div class="progress"><div id="recv-bar"></div></div>
-        <canvas id="recv-map" class="map" width="1" height="1" aria-label="Received chunk map"></canvas>
-        <video id="video" muted autoplay playsinline></video>
+        <div class="stage viewfinder" id="viewfinder" hidden>
+          <video id="video" muted autoplay playsinline disablepictureinpicture></video>
+        </div>
       </section>
     </main>
 
     <footer>
-      No network. No upload. Everything stays in the two browsers.
-      <a href="https://github.com/intelQong/LighteningSend">source</a>
+      Files move screen to screen. No network, no upload, no account.
+      <a href="https://github.com/intelQong/LighteningSend">Source</a>
     </footer>
 
     <script src="vendor/qrcode.js"></script>
