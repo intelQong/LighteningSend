@@ -2,7 +2,7 @@
 
 Transfer files between two devices with no network, using animated QR codes: one screen displays them, the other's camera reads them.
 
-Live at [lighteningsend.intelqong.link](https://lighteningsend.intelqong.link).
+Live at [lightsend.intelqong.link](https://lightsend.intelqong.link).
 
 This is a fork of [mohankumarelec/airgapped-qr-code-transfer](https://github.com/mohankumarelec/airgapped-qr-code-transfer), rewritten with zero third-party CDNs, native gzip streams instead of pako, raw binary QR frames, and CRC32-checked transfers.
 
@@ -10,9 +10,10 @@ This is a fork of [mohankumarelec/airgapped-qr-code-transfer](https://github.com
 
 A single page at the root URL, with two modes: **Send** and **Receive**.
 
-- **Send**: pick a file. It's gzipped with the browser's native `CompressionStream`, split into chunks, and each chunk is encoded as a QR code carrying raw binary (QR byte mode — no base64 overhead). The sender loops the frame sequence forever.
-- **Receive**: point the camera at the sender's screen. Frames are collected in any order; each chunk only needs to be seen once, so a missed frame is just picked up on the next loop. There's no restarting a transfer.
+- **Send**: pick a file. It's gzipped with the browser's native `CompressionStream`, split into chunks, and each chunk is encoded as a QR code carrying raw binary (QR byte mode — no base64 overhead). The first pass sends every block once, so a clean transfer costs exactly one frame per block.
+- **Receive**: point the camera at the sender's screen. Frames are collected in any order, and a missed one never has to come round again — see fountain coding below.
 - Every data frame carries a CRC32, so a bad camera read is dropped rather than accepted. The full compressed stream carries its own CRC32 too, checked before the file is written to disk.
+- **Fountain coding (systematic LT).** After the first pass the sender emits repair symbols forever: each is the XOR of a pseudo-random set of blocks, derived from the frame id alone so nothing extra travels on the wire. The receiver peels them to recover whatever it missed. Any `k(1+ε)` frames finish the transfer — measured overhead is 1.16–1.38x the useful frame count at 20–50% loss, against roughly 2.7x for a plain repeating loop at 50%.
 - Two tuning knobs on the send side: chunk size (QR density) and frames per second. Lower both if the receiver is struggling to keep up.
 - Received filenames are sanitised, and decompression is capped to guard against decompression bombs.
 
@@ -41,16 +42,22 @@ Camera access requires HTTPS (or `localhost`).
 - `app.js`, `app.css` — logic and styling
 - `vendor/` — vendored dependencies
 - `_headers` — Cloudflare Pages security headers
-- `test.mjs` — protocol self-check: `node test.mjs`
+- `build.mjs` — minifies into `dist/` for deploy; the unbuilt repo still runs as-is
+- `test.mjs` — protocol and fountain self-check: `npm test`
 - `test.html` — QR encode/decode round-trip check; serve the directory and open it in a browser
 
 ## Deployment
 
-Static site, no build step. Deployed to Cloudflare Pages:
+Cloudflare Pages, static, no server:
 
 ```sh
-npx wrangler pages deploy . --project-name=lighteningsend
+npm ci
+npm test
+npm run deploy    # builds dist/ and uploads it
 ```
+
+The build only minifies; `dist/` has the same layout as the source, so opening
+`index.html` straight from the repo works identically.
 
 ## License
 

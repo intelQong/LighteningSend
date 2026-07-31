@@ -48,3 +48,60 @@ assert.equal(sanitiseFilename("report.pdf"), "report.pdf");
 
 console.log("ok — protocol self-check passed");
 
+
+// --- Fountain: the receiver must finish without ever re-seeing a lost block ---
+import { Fountain, repairIndices } from "./app.js";
+
+function xorInto(a, b) {
+  for (let i = 0; i < a.length; i++) a[i] ^= b[i];
+}
+
+// Deterministic "which frames does the camera miss" mask, so this test can't flake.
+function lossy(seed) {
+  let s = seed >>> 0;
+  return () => ((s ^= s << 13), (s >>>= 0), (s ^= s >>> 17), (s ^= s << 5), (s >>>= 0), s / 2 ** 32);
+}
+
+for (const [k, blockSize, lossRate] of [
+  [32, 768, 0.3],
+  [128, 768, 0.5],
+  [300, 256, 0.2],
+  [1, 768, 0.5],
+]) {
+  const src = new Uint8Array(k * blockSize);
+  for (let i = 0; i < src.length; i++) src[i] = (i * 131 + k) & 0xff;
+  const block = (i) => src.subarray(i * blockSize, (i + 1) * blockSize);
+
+  const drop = lossy(0xc0ffee + k);
+  const f = new Fountain(k, blockSize);
+  let sent = 0;
+
+  // Systematic pass, then repair symbols — exactly what the sender emits.
+  for (let i = 0; i < k && !f.done; i++, sent++) {
+    if (drop() < lossRate) continue; // camera missed this frame
+    f.add([i], block(i));
+  }
+  for (let id = 1; !f.done; id++, sent++) {
+    assert.ok(sent < k * 20, `k=${k}: did not converge after ${sent} frames`);
+    if (drop() < lossRate) continue;
+    const ids = repairIndices(id, k);
+    const payload = new Uint8Array(blockSize);
+    for (const i of ids) xorInto(payload, block(i));
+    f.add(ids, payload);
+  }
+
+  assert.deepEqual(f.assemble(src.length), src, `k=${k}: reassembled bytes differ`);
+  const overhead = ((sent * (1 - lossRate)) / k).toFixed(2);
+  console.log(
+    `ok — k=${k}, ${lossRate * 100}% frame loss: recovered from ${sent} sent (${overhead}x useful frames)`
+  );
+}
+
+// Sender and receiver must derive identical block sets from the frame id alone.
+for (const k of [7, 64, 500]) {
+  for (const id of [1, 2, 99, 4294967295]) {
+    assert.deepEqual(repairIndices(id, k), repairIndices(id, k));
+    assert.ok(repairIndices(id, k).every((i) => i >= 0 && i < k), `k=${k} id=${id}: index out of range`);
+  }
+}
+console.log("ok — repair index derivation is deterministic and in range");

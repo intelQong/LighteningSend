@@ -5,9 +5,13 @@
 //   header frame  'H' | u8 nameLen | name(utf8) | u32 compLen | u16 chunkCount
 //                     | u16 chunkSize | u32 crc32(compressed stream) | u32 crc32(frame)
 //   data frame    'D' | u16 index | payload | u32 crc32(frame)
+//   repair frame  'R' | u32 frameId | payload | u32 crc32(frame)
 //
 // crc32(frame) covers every byte before it. A bad camera read fails the CRC and
 // is discarded, so a garbled frame can never corrupt the output.
+//
+// A repair frame's payload is the XOR of a set of blocks derived from frameId
+// alone, so the receiver reconstructs the same set without being told it.
 
 import { scanImageData } from "./vendor/zbar.mjs";
 
@@ -15,6 +19,7 @@ const MAX_INFLATED = 512 * 1024 * 1024; // decompression-bomb ceiling
 const MAX_CHUNKS = 65535; // u16 index
 const HDR = 0x48; // 'H'
 const DAT = 0x44; // 'D'
+const REP = 0x52; // 'R'
 const HEADER_EVERY = 16; // re-broadcast metadata this often, so a late receiver catches up
 
 // ---------------------------------------------------------------- utilities
@@ -121,6 +126,16 @@ export function buildData(index, payload) {
   return frame;
 }
 
+export function buildRepair(frameId, payload) {
+  const frame = new Uint8Array(5 + payload.length + 4);
+  const dv = new DataView(frame.buffer);
+  frame[0] = REP;
+  dv.setUint32(1, frameId);
+  frame.set(payload, 5);
+  dv.setUint32(frame.length - 4, crc32(frame, frame.length - 4));
+  return frame;
+}
+
 // Returns a header/data object, or null if the frame is malformed or fails CRC.
 export function parseFrame(bytes) {
   if (bytes.length < 8) return null;
@@ -130,6 +145,9 @@ export function parseFrame(bytes) {
 
   if (bytes[0] === DAT) {
     return { kind: "data", index: dv.getUint16(1), payload: bytes.slice(3, body) };
+  }
+  if (bytes[0] === REP) {
+    return { kind: "repair", frameId: dv.getUint32(1), payload: bytes.slice(5, body) };
   }
   if (bytes[0] === HDR) {
     const nameLen = bytes[1];
@@ -145,6 +163,138 @@ export function parseFrame(bytes) {
     };
   }
   return null;
+}
+
+// ------------------------------------------------- fountain (systematic LT)
+//
+// Pass 1 sends every block once, so a clean transfer still costs exactly k
+// frames. After that the sender emits repair symbols forever: each is the XOR
+// of a pseudo-random set of blocks, and the receiver peels them to recover
+// whatever it missed. Any k(1+ε) frames will do — it never has to wait for one
+// specific frame to come round again.
+//
+// Both sides derive the same block set from the frame id alone, so nothing but
+// the id has to travel on the wire.
+
+function xorshift32(seed) {
+  // Frame ids are consecutive small integers, and xorshift seeded with those
+  // produces near-identical streams — repair sets would overlap and the decode
+  // would stall. Run the seed through splitmix32's finaliser first.
+  let s = seed >>> 0;
+  s ^= s >>> 16;
+  s = Math.imul(s, 0x21f0aaad) >>> 0;
+  s ^= s >>> 15;
+  s = Math.imul(s, 0x735a2d97) >>> 0;
+  s ^= s >>> 15;
+  s = s >>> 0 || 0x9e3779b9;
+  return () => {
+    s ^= s << 13;
+    s >>>= 0;
+    s ^= s >>> 17;
+    s ^= s << 5;
+    s >>>= 0;
+    return s / 4294967296;
+  };
+}
+
+// Robust soliton distribution (Luby). Cached — it only depends on k.
+const solitonCache = new Map();
+function solitonCdf(k) {
+  let cdf = solitonCache.get(k);
+  if (cdf) return cdf;
+  const c = 0.03;
+  const delta = 0.5;
+  const R = c * Math.log(k / delta) * Math.sqrt(k);
+  const p = new Float64Array(k + 1);
+  p[1] = 1 / k;
+  for (let i = 2; i <= k; i++) p[i] = 1 / (i * (i - 1));
+  const kr = Math.floor(k / R);
+  for (let i = 1; i < kr; i++) p[i] += R / (i * k);
+  if (kr >= 1 && kr <= k) p[kr] += (R * Math.log(R / delta)) / k;
+  let sum = 0;
+  for (let i = 1; i <= k; i++) sum += p[i];
+  cdf = new Float64Array(k + 1);
+  let acc = 0;
+  for (let i = 1; i <= k; i++) (acc += p[i] / sum), (cdf[i] = acc);
+  solitonCache.set(k, cdf);
+  return cdf;
+}
+
+export function repairIndices(frameId, k) {
+  const rnd = xorshift32(frameId);
+  const cdf = solitonCdf(k);
+  const u = rnd();
+  let d = 1;
+  while (d < k && cdf[d] < u) d++;
+  const ids = new Set();
+  while (ids.size < d) ids.add(Math.floor(rnd() * k) % k);
+  return [...ids];
+}
+
+function xorInto(a, b) {
+  for (let i = 0; i < a.length; i++) a[i] ^= b[i];
+}
+
+export class Fountain {
+  constructor(k, blockSize) {
+    this.k = k;
+    this.blockSize = blockSize;
+    this.solved = new Map();
+    this.pending = [];
+  }
+
+  get done() {
+    return this.solved.size === this.k;
+  }
+
+  // ids: block indices XORed into data. A systematic block is just ids=[i].
+  add(ids, data) {
+    if (data.length !== this.blockSize) return;
+    const eq = { ids: new Set(ids), data: data.slice() };
+    this.#reduce(eq);
+    if (eq.ids.size === 0) return; // nothing new
+    this.pending.push(eq);
+    this.#peel();
+  }
+
+  #reduce(eq) {
+    for (const i of [...eq.ids]) {
+      const s = this.solved.get(i);
+      if (s) {
+        xorInto(eq.data, s);
+        eq.ids.delete(i);
+      }
+    }
+  }
+
+  // ponytail: O(n^2) peel over the pending list. Fine to a few thousand blocks;
+  // swap in an index from block -> equations if that ever becomes the bottleneck.
+  #peel() {
+    for (let progress = true; progress; ) {
+      progress = false;
+      for (let j = 0; j < this.pending.length; j++) {
+        const eq = this.pending[j];
+        this.#reduce(eq);
+        if (eq.ids.size === 1) {
+          const i = eq.ids.values().next().value;
+          if (!this.solved.has(i)) {
+            this.solved.set(i, eq.data);
+            progress = true;
+          }
+        }
+        if (eq.ids.size <= 1) this.pending.splice(j--, 1);
+      }
+    }
+  }
+
+  assemble(compLen) {
+    const out = new Uint8Array(compLen);
+    for (let i = 0; i < this.k; i++) {
+      const at = i * this.blockSize;
+      out.set(this.solved.get(i).subarray(0, Math.min(this.blockSize, compLen - at)), at);
+    }
+    return out;
+  }
 }
 
 // ------------------------------------------------------------------ send
@@ -210,7 +360,7 @@ function initSend() {
     fileInput.disabled = true;
     status.textContent = "Compressing…";
 
-    let comp, chunkSize, chunkCount, header;
+    let comp, blocks, chunkSize, chunkCount, header;
     try {
       comp = await gzip(await file.arrayBuffer());
       chunkSize = Number($("chunk-size").value);
@@ -227,29 +377,41 @@ function initSend() {
         chunkSize,
         crc32(comp)
       );
+      // Repair symbols XOR whole blocks, so every block must be full width.
+      blocks = new Uint8Array(chunkCount * chunkSize);
+      blocks.set(comp);
     } catch (err) {
       status.textContent = err.message;
       return stop();
     }
 
     const compressed = `${humanSize(file.size)} → ${humanSize(comp.length)}, ${chunkCount} frames`;
-    let idx = 0;
-    let pass = 1;
+    const block = (i) => blocks.subarray(i * chunkSize, (i + 1) * chunkSize);
+    let idx = 0; // systematic pass position
+    let frameId = 1; // repair symbol id, never reused
     let sinceHeader = HEADER_EVERY; // send metadata first
 
-    // Loop the sequence forever: the receiver needs each chunk once, in any
-    // order, so a missed frame is just picked up on the next pass.
+    // Pass 1 is systematic (every block once). After that, repair symbols
+    // forever — the receiver can finish on any k(1+ε) of them.
     while (running) {
       let frame, label;
       if (sinceHeader >= HEADER_EVERY) {
         frame = header;
         label = "metadata";
         sinceHeader = 0;
-      } else {
-        frame = buildData(idx, comp.subarray(idx * chunkSize, (idx + 1) * chunkSize));
-        label = `frame ${idx + 1}/${chunkCount}`;
+      } else if (idx < chunkCount) {
+        frame = buildData(idx, block(idx));
+        label = `block ${idx + 1}/${chunkCount}`;
         sinceHeader++;
-        if (++idx >= chunkCount) (idx = 0), pass++;
+        idx++;
+      } else {
+        const ids = repairIndices(frameId, chunkCount);
+        const payload = new Uint8Array(chunkSize);
+        for (const i of ids) xorInto(payload, block(i));
+        frame = buildRepair(frameId, payload);
+        label = `repair ${frameId} (${ids.length} blocks)`;
+        sinceHeader++;
+        frameId++;
       }
       try {
         drawQR(canvas, frame);
@@ -257,7 +419,7 @@ function initSend() {
         status.textContent = `QR encode failed: ${err.message}. Lower the QR density.`;
         return stop();
       }
-      status.textContent = `${compressed} · ${label} · pass ${pass}`;
+      status.textContent = `${compressed} · ${label}`;
       await new Promise((r) => setTimeout(r, 1000 / Number(fps.value)));
     }
     status.textContent = `Stopped. ${compressed}`;
@@ -288,11 +450,13 @@ function initReceive() {
   const sctx = scratch.getContext("2d", { willReadFrequently: true });
 
   let meta = null;
-  let chunks = new Map();
+  let fountain = null;
+  let framesSeen = 0;
 
   const reset = () => {
     meta = null;
-    chunks = new Map();
+    fountain = null;
+    framesSeen = 0;
     bar.style.width = "0%";
     map.width = 1;
   };
@@ -309,10 +473,10 @@ function initReceive() {
     const ctx = map.getContext("2d");
     ctx.clearRect(0, 0, map.width, map.height);
     for (let i = 0; i < meta.chunkCount; i++) {
-      ctx.fillStyle = chunks.has(i) ? "#4ade80" : "#2b3245";
+      ctx.fillStyle = fountain.solved.has(i) ? "#4ade80" : "#2b3245";
       ctx.fillRect((i % cols) * cell, Math.floor(i / cols) * cell, cell - 1, cell - 1);
     }
-    bar.style.width = `${(chunks.size / meta.chunkCount) * 100}%`;
+    bar.style.width = `${(fountain.solved.size / meta.chunkCount) * 100}%`;
   };
 
   const stop = () => {
@@ -325,15 +489,12 @@ function initReceive() {
 
   async function finish() {
     status.textContent = "Reassembling…";
-    const out = new Uint8Array(meta.compLen);
-    for (let i = 0; i < meta.chunkCount; i++) {
-      out.set(chunks.get(i).subarray(0, meta.compLen - i * meta.chunkSize), i * meta.chunkSize);
-    }
+    const out = fountain.assemble(meta.compLen);
     if (crc32(out) !== meta.fileCrc) {
-      // Every chunk passed its own CRC, so this means chunks from two different
+      // Every frame passed its own CRC, so this means frames from two different
       // transfers got mixed. Keep the metadata, drop the payload, resync.
       status.textContent = "Checksum mismatch — frames from two transfers mixed. Restarting.";
-      chunks = new Map();
+      fountain = new Fountain(meta.chunkCount, meta.chunkSize);
       paintMap();
       return;
     }
@@ -367,24 +528,28 @@ function initReceive() {
           if (frame.kind === "header") {
             if (meta && meta.fileCrc !== frame.fileCrc) reset(); // new transfer started
             meta = frame;
+            fountain ??= new Fountain(frame.chunkCount, frame.chunkSize);
             paintMap();
-          } else if (
-            meta &&
-            frame.index < meta.chunkCount &&
-            frame.payload.length <= meta.chunkSize &&
-            !chunks.has(frame.index)
-          ) {
-            chunks.set(frame.index, frame.payload);
+          } else if (!meta) {
+            // Metadata hasn't arrived yet; it repeats every few frames.
+            continue;
+          } else if (frame.kind === "data" && frame.index < meta.chunkCount) {
+            framesSeen++;
+            fountain.add([frame.index], frame.payload);
+            paintMap();
+          } else if (frame.kind === "repair") {
+            framesSeen++;
+            fountain.add(repairIndices(frame.frameId, meta.chunkCount), frame.payload);
             paintMap();
           }
         }
 
         if (meta) {
-          status.textContent =
-            chunks.size === meta.chunkCount
-              ? "Complete."
-              : `${sanitiseFilename(meta.name)} — ${chunks.size}/${meta.chunkCount} frames`;
-          if (chunks.size === meta.chunkCount) return finish();
+          const got = fountain.solved.size;
+          status.textContent = fountain.done
+            ? "Complete."
+            : `${sanitiseFilename(meta.name)} — ${got}/${meta.chunkCount} blocks (${framesSeen} frames read)`;
+          if (fountain.done) return finish();
         }
       }
     } catch (err) {
