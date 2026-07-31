@@ -1,0 +1,6 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "lighteningsend",
+  // Static site, no build step — the repo root is what gets served.
+  "pages_build_output_dir": "."
+}
