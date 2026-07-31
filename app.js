@@ -23,6 +23,7 @@ const HDR = 0x48; // 'H'
 const DAT = 0x44; // 'D'
 const REP = 0x52; // 'R'
 const HEADER_EVERY = 16; // re-broadcast metadata this often, so a late receiver catches up
+const SCAN_MAX = 960; // longest edge of the buffer handed to zbar; see bench.html
 
 // ---------------------------------------------------------------- utilities
 
@@ -314,7 +315,11 @@ function drawQR(canvas, frame) {
 
   const count = qr.getModuleCount();
   const quiet = 4;
-  const target = Math.min(window.innerWidth, window.innerHeight * 0.7) * 0.95;
+  // In fullscreen the QR gets the whole screen; inline it shares the page.
+  const box = canvas.parentElement.getBoundingClientRect();
+  const target = document.fullscreenElement
+    ? Math.min(window.innerWidth, window.innerHeight) * 0.96
+    : Math.min(box.width || window.innerWidth, window.innerHeight * 0.7) * 0.98;
   const scale = Math.max(2, Math.floor(target / (count + quiet * 2)));
   const size = (count + quiet * 2) * scale;
 
@@ -340,11 +345,21 @@ function initSend() {
   const status = $("send-status");
   const canvas = $("qr");
   const stage = $("qr-stage");
+  const fullBtn = $("full-btn");
   const fps = $("fps");
   const fpsOut = $("fps-out");
   let running = false;
 
   fps.addEventListener("input", () => (fpsOut.value = fps.value));
+
+  fullBtn.addEventListener("click", () => {
+    if (document.fullscreenElement) document.exitFullscreen();
+    else stage.requestFullscreen?.().catch(() => {});
+  });
+  // Fullscreen changes the space available, so the next frame must be resized.
+  document.addEventListener("fullscreenchange", () => {
+    fullBtn.textContent = document.fullscreenElement ? "Exit full screen" : "Full screen";
+  });
 
   // Which source is active is owned by the File/Text switch below.
   let source = "file";
@@ -653,8 +668,10 @@ function initReceive() {
       const w = video.videoWidth;
       const h = video.videoHeight;
       if (w && h) {
-        // Cap the scan buffer — full 4K frames cost far more than they decode.
-        const s = Math.min(1, 1600 / Math.max(w, h));
+        // 960 px is where decode rate stops improving: measured identical to
+        // 1600 in every camera condition, at 2.6x less work per frame. Scan cost
+        // is what caps frames per second on a phone, so this is throughput.
+        const s = Math.min(1, SCAN_MAX / Math.max(w, h));
         const sw = Math.round(w * s);
         const sh = Math.round(h * s);
         if (scratch.width !== sw) (scratch.width = sw), (scratch.height = sh);

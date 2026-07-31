@@ -87,11 +87,14 @@
         </div>
 
         <div class="field">
-          <label class="field-label" for="fps">Speed <output id="fps-out">8</output> fps</label>
-          <input type="range" id="fps" min="1" max="20" step="1" value="8" />
+          <label class="field-label" for="fps">Speed <output id="fps-out">12</output> fps</label>
+          <input type="range" id="fps" min="1" max="24" step="1" value="12" />
         </div>
 
-        <button id="send-btn" class="filled" disabled>Start transfer</button>
+        <div class="row">
+          <button id="send-btn" class="filled" disabled>Start transfer</button>
+          <button id="full-btn" class="tonal" type="button">Full screen</button>
+        </div>
         <p id="send-status" class="status" role="status">Pick a file to get started.</p>
 
         <div class="stage" id="qr-stage" hidden>

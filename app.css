@@ -423,6 +423,22 @@ canvas#qr {
   image-rendering: pixelated;
 }
 
+/* Fullscreen exists to make the code physically bigger to the camera, which is
+   what lets the denser settings decode. Fill the screen, nothing else. */
+#qr-stage:fullscreen {
+  align-items: center;
+  width: 100vw;
+  height: 100vh;
+  padding: 0;
+  border-radius: 0;
+  background: #fff;
+}
+
+#qr-stage:fullscreen canvas {
+  max-width: 100vw;
+  max-height: 100vh;
+}
+
 /* --------------------------------------------------------- progress */
 
 .progress {

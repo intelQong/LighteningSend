@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head><meta charset="UTF-8" /><title>Scan benchmark</title></head>
+  <body>
+    <pre id="out" style="font: 13px monospace"></pre>
+    <script src="vendor/qrcode.js"></script>
+    <script type="module">
+      import { buildData } from "./app.js";
+      import { scanRGBABuffer, scanGrayBuffer } from "./vendor/zbar.mjs";
+
+      const out = document.getElementById("out");
+      const log = (l) => (out.textContent += l + "\n");
+
+      function latin1(b) {
+        let s = "";
+        for (let i = 0; i < b.length; i += 4096) s += String.fromCharCode.apply(null, b.subarray(i, i + 4096));
+        return s;
+      }
+      function renderQR(frame, scale = 4, quiet = 4) {
+        const qr = qrcode(0, "M");
+        qr.addData(latin1(frame), "Byte");
+        qr.make();
+        const n = qr.getModuleCount();
+        const size = (n + quiet * 2) * scale;
+        const c = new OffscreenCanvas(size, size);
+        const x = c.getContext("2d");
+        x.fillStyle = "#fff"; x.fillRect(0, 0, size, size);
+        x.fillStyle = "#000";
+        for (let r = 0; r < n; r++)
+          for (let col = 0; col < n; col++)
+            if (qr.isDark(r, col)) x.fillRect((col + quiet) * scale, (r + quiet) * scale, scale, scale);
+        return c;
+      }
+      function cameraFrame(qrCanvas, w, fill, blur = 1.2) {
+        const h = Math.round((w * 9) / 16);
+        const c = new OffscreenCanvas(w, h);
+        const x = c.getContext("2d");
+        x.fillStyle = "#5a5f66"; x.fillRect(0, 0, w, h);
+        const t = h * fill;
+        x.save(); x.translate(w / 2, h / 2); x.rotate(0.05); x.filter = `blur(${blur}px)`;
+        x.drawImage(qrCanvas, -t / 2, -t / 2, t, t); x.restore();
+        return x.getImageData(0, 0, w, h);
+      }
+      function resize(img, cap) {
+        const s = Math.min(1, cap / Math.max(img.width, img.height));
+        if (s === 1) return img;
+        const sw = Math.round(img.width * s), sh = Math.round(img.height * s);
+        const src = new OffscreenCanvas(img.width, img.height);
+        src.getContext("2d").putImageData(img, 0, 0);
+        const d = new OffscreenCanvas(sw, sh);
+        const dx = d.getContext("2d");
+        dx.drawImage(src, 0, 0, sw, sh);
+        return dx.getImageData(0, 0, sw, sh);
+      }
+      const toGray = (img) => {
+        const g = new Uint8Array(img.width * img.height);
+        const d = img.data;
+        for (let i = 0, p = 0; p < g.length; i += 4, p++)
+          g[p] = (19595 * d[i] + 38469 * d[i + 1] + 7472 * d[i + 2]) >> 16;
+        return g;
+      };
+
+      const N = 8;
+      const bench = async (fn) => { await fn(); const t0 = performance.now();
+        for (let i = 0; i < N; i++) await fn(); return (performance.now() - t0) / N; };
+
+      // Shipped: downscale the whole 16:9 frame to 1600px.
+      const shipped = (img) => resize(img, 1600);
+
+      // Proposed: take the largest centred square at native resolution, capped.
+      // The QR is square and the user aims at it, so the side bands never hold it.
+      function centreCrop(img, cap = 1200) {
+        const side = Math.min(img.width, img.height);
+        const src = new OffscreenCanvas(img.width, img.height);
+        src.getContext("2d").putImageData(img, 0, 0);
+        const outSide = Math.min(side, cap);
+        const d = new OffscreenCanvas(outSide, outSide);
+        d.getContext("2d").drawImage(
+          src, (img.width - side) / 2, (img.height - side) / 2, side, side, 0, 0, outSide, outSide
+        );
+        return d.getContext("2d").getImageData(0, 0, outSide, outSide);
+      }
+
+      const TRIALS = 8;
+      const CAPS = [1600, 1200, 960, 800, 640];
+      const CONDS = [
+        ["close    ", 1920, 0.85, 0.6],
+        ["arm's len", 1920, 0.6, 1.2],
+        ["far/shaky", 1920, 0.45, 2.0],
+      ];
+
+      async function rate(bytes, cond, cap) {
+        const [, w, fill, blur] = cond;
+        let ok = 0;
+        for (let t = 0; t < TRIALS; t++) {
+          const payload = Uint8Array.from({ length: bytes }, (_, i) => (i * 31 + t * 7) & 0xff);
+          const frame = buildData(t, payload);
+          const img = resize(cameraFrame(renderQR(frame), w, fill, blur), cap);
+          const syms = await scanRGBABuffer(img.data.buffer, img.width, img.height);
+          if (syms.length) {
+            const got = new Uint8Array(syms[0].data.buffer.slice(0));
+            if (got.length === frame.length && got.every((b, i) => b === frame[i])) ok++;
+          }
+        }
+        return Math.round((ok / TRIALS) * 100);
+      }
+
+      // How far can the scan buffer shrink before decodes start failing?
+      // Smaller buffer = far cheaper scan = more frames per second on a phone.
+      log("decode rate vs scan buffer size\n");
+      log("   bytes  condition   " + CAPS.map((c) => String(c).padStart(6)).join(""));
+      for (const bytes of [384, 768]) {
+        for (const cond of CONDS) {
+          const row = [];
+          for (const cap of CAPS) row.push((await rate(bytes, cond, cap) + "%").padStart(6));
+          log(`   ${String(bytes).padStart(5)}  ${cond[0]}  ${row.join("")}`);
+        }
+      }
+
+      log("\n   scan cost per frame");
+      const probe = cameraFrame(renderQR(buildData(1, new Uint8Array(384))), 1920, 0.6, 1.2);
+      for (const cap of CAPS) {
+        const img = resize(probe, cap);
+        const ms = await bench(() => scanRGBABuffer(img.data.buffer, img.width, img.height));
+        log(`   ${String(cap).padStart(6)}px  ${ms.toFixed(1).padStart(6)} ms   ceiling ${(1000 / ms).toFixed(0)} fps`);
+      }
+      document.title = "done";
+    </script>
+  </body>
+</html>
