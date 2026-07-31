@@ -34,6 +34,12 @@
     <main>
       <!-- ---------------------------------------------------------- SEND -->
       <section id="panel-send" role="tabpanel" aria-labelledby="tab-send">
+        <div class="segmented compact" role="tablist" aria-label="What to send">
+          <button id="src-file" role="tab" aria-controls="source-file" aria-selected="true">File</button>
+          <button id="src-text" role="tab" aria-controls="source-text" aria-selected="false">Text</button>
+        </div>
+
+        <div id="source-file">
         <label class="dropzone" for="file-input">
           <input type="file" id="file-input" />
           <svg class="dropzone-icon" viewBox="0 0 24 24" aria-hidden="true">
@@ -42,6 +48,16 @@
           <span id="file-label" class="dropzone-label">Choose a file</span>
           <span class="dropzone-hint">Nothing is uploaded. The other screen reads it through the camera.</span>
         </label>
+        </div>
+
+        <div id="source-text" hidden>
+          <textarea id="text-input" rows="5" placeholder="Write a message, paste a link, or drop in a key…"></textarea>
+          <div class="row">
+            <button id="paste-btn" class="tonal" type="button">Paste from clipboard</button>
+            <button id="clear-btn" class="text-btn" type="button" hidden>Clear</button>
+          </div>
+          <p class="field-hint">The other device shows this on screen with a copy button.</p>
+        </div>
 
         <div class="field">
           <span class="field-label" id="density-label">QR density</span>
@@ -89,6 +105,12 @@
         <div class="progress" id="recv-progress" hidden>
           <div class="track"><div id="recv-bar"></div></div>
           <canvas id="recv-map" class="mosaic" width="1" height="1" aria-label="Blocks received"></canvas>
+        </div>
+
+        <div class="message" id="recv-text" hidden>
+          <span class="field-label">Message received</span>
+          <pre id="recv-text-body"></pre>
+          <button id="copy-btn" class="tonal">Copy</button>
         </div>
 
         <div class="stage viewfinder" id="viewfinder" hidden>

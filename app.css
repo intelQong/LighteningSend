@@ -135,6 +135,14 @@ body {
   color: var(--on-primary-container);
 }
 
+.segmented.compact {
+  align-self: flex-start;
+}
+
+.segmented.compact button {
+  padding: 8px 20px;
+}
+
 /* --------------------------------------------------------------- layout */
 
 main {
@@ -272,6 +280,94 @@ input[type="range"] {
 output {
   font-variant-numeric: tabular-nums;
   color: var(--on-surface);
+}
+
+textarea {
+  width: 100%;
+  resize: vertical;
+  min-height: 120px;
+  padding: 16px;
+  border: 1px solid var(--outline-variant);
+  border-radius: var(--radius-m);
+  background: var(--surface);
+  color: var(--on-surface);
+  font: 16px/1.5 var(--font);
+}
+
+textarea:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: inset 0 0 0 1px var(--primary);
+}
+
+textarea::placeholder {
+  color: var(--on-surface-variant);
+}
+
+#source-text {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.text-btn {
+  appearance: none;
+  border: 0;
+  background: none;
+  border-radius: var(--radius-l);
+  color: var(--primary);
+  font: 500 14px/1 var(--font);
+  padding: 10px 16px;
+  cursor: pointer;
+}
+
+.text-btn:hover {
+  background: var(--surface-container);
+}
+
+/* ------------------------------------------------------ received message */
+
+.message {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 20px;
+  border-radius: var(--radius-m);
+  background: var(--surface-container);
+}
+
+.message pre {
+  margin: 0;
+  width: 100%;
+  max-height: 40dvh;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font: 15px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--on-surface);
+}
+
+.tonal {
+  appearance: none;
+  border: 0;
+  border-radius: var(--radius-l);
+  background: var(--primary-container);
+  color: var(--on-primary-container);
+  font: 500 14px/1 var(--font);
+  padding: 10px 24px;
+  cursor: pointer;
+}
+
+.tonal:hover {
+  box-shadow: 0 1px 3px 1px var(--scrim);
 }
 
 /* -------------------------------------------------------------- buttons */

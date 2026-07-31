@@ -7,9 +7,11 @@ This is a fork of [mohankumarelec/airgapped-qr-code-transfer](https://github.com
 
 ## How it works
 
-A single page at the root URL, with two modes: **Send** and **Receive**.
+A single page at the root URL, with two modes: **Send** and **Receive**. Send
+takes either a file or a typed message.
 
 - **Send**: pick a file. It's gzipped with the browser's native `CompressionStream`, split into chunks, and each chunk is encoded as a QR code carrying raw binary (QR byte mode — no base64 overhead). The first pass sends every block once, so a clean transfer costs exactly one frame per block.
+- **Text**: type or paste a message instead of picking a file — a Wi-Fi password, an SSH key, a link. A **Paste from clipboard** button fills it in one tap. It rides the same pipeline with one flag byte set in the header, so the receiver shows it on screen with a **Copy** button rather than saving a file. Anything over 100,000 characters is saved as `message.txt` instead of rendered.
 - **Receive**: point the camera at the sender's screen. Frames are collected in any order, and a missed one never has to come round again — see fountain coding below.
 - Every data frame carries a CRC32, so a bad camera read is dropped rather than accepted. The full compressed stream carries its own CRC32 too, checked before the file is written to disk.
 - **Fountain coding (systematic LT).** After the first pass the sender emits repair symbols forever: each is the XOR of a pseudo-random set of blocks, derived from the frame id alone so nothing extra travels on the wire. The receiver peels them to recover whatever it missed. Any `k(1+ε)` frames finish the transfer — measured overhead is 1.16–1.38x the useful frame count at 20–50% loss, against roughly 2.7x for a plain repeating loop at 50%.

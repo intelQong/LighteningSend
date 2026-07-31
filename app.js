@@ -2,8 +2,10 @@
 //
 // Wire format (raw bytes, QR byte mode — no base64):
 //
-//   header frame  'H' | u8 nameLen | name(utf8) | u32 compLen | u16 chunkCount
-//                     | u16 chunkSize | u32 crc32(compressed stream) | u32 crc32(frame)
+//   header frame  'H' | u8 flags | u8 nameLen | name(utf8) | u32 compLen
+//                     | u16 chunkCount | u16 chunkSize | u32 crc32(compressed stream)
+//                     | u32 crc32(frame)
+//                     flags bit 0: payload is UTF-8 text, to show rather than save
 //   data frame    'D' | u16 index | payload | u32 crc32(frame)
 //   repair frame  'R' | u32 frameId | payload | u32 crc32(frame)
 //
@@ -100,14 +102,15 @@ async function gunzipCapped(bytes, cap = MAX_INFLATED) {
 
 // ------------------------------------------------------------ frame codec
 
-export function buildHeader(name, compLen, chunkCount, chunkSize, fileCrc) {
+export function buildHeader(name, compLen, chunkCount, chunkSize, fileCrc, isText = false) {
   const nameBytes = new TextEncoder().encode(name).slice(0, 255);
-  const frame = new Uint8Array(2 + nameBytes.length + 12 + 4);
+  const frame = new Uint8Array(3 + nameBytes.length + 12 + 4);
   const dv = new DataView(frame.buffer);
   frame[0] = HDR;
-  frame[1] = nameBytes.length;
-  frame.set(nameBytes, 2);
-  let p = 2 + nameBytes.length;
+  frame[1] = isText ? 1 : 0;
+  frame[2] = nameBytes.length;
+  frame.set(nameBytes, 3);
+  let p = 3 + nameBytes.length;
   dv.setUint32(p, compLen);
   dv.setUint16(p + 4, chunkCount);
   dv.setUint16(p + 6, chunkSize);
@@ -150,12 +153,13 @@ export function parseFrame(bytes) {
     return { kind: "repair", frameId: dv.getUint32(1), payload: bytes.slice(5, body) };
   }
   if (bytes[0] === HDR) {
-    const nameLen = bytes[1];
-    const p = 2 + nameLen;
+    const nameLen = bytes[2];
+    const p = 3 + nameLen;
     if (p + 12 !== body) return null;
     return {
       kind: "header",
-      name: new TextDecoder().decode(bytes.subarray(2, p)),
+      isText: (bytes[1] & 1) === 1,
+      name: new TextDecoder().decode(bytes.subarray(3, p)),
       compLen: dv.getUint32(p),
       chunkCount: dv.getUint16(p + 4),
       chunkSize: dv.getUint16(p + 6),
@@ -329,6 +333,7 @@ function drawQR(canvas, frame) {
 function initSend() {
   const fileInput = $("file-input");
   const fileLabel = $("file-label");
+  const textInput = $("text-input");
   const btn = $("send-btn");
   const status = $("send-status");
   const canvas = $("qr");
@@ -339,45 +344,117 @@ function initSend() {
 
   fps.addEventListener("input", () => (fpsOut.value = fps.value));
 
+  // Which source is active is owned by the File/Text switch below.
+  let source = "file";
+  const refresh = () => {
+    btn.disabled = running
+      ? false
+      : source === "file"
+        ? !fileInput.files[0]
+        : textInput.value.trim().length === 0;
+  };
+
   fileInput.addEventListener("change", () => {
     const f = fileInput.files[0];
     fileLabel.textContent = f ? `${f.name} · ${humanSize(f.size)}` : "Choose a file";
-    btn.disabled = !f;
+    refresh();
   });
+  const pasteBtn = $("paste-btn");
+  const clearBtn = $("clear-btn");
+
+  const afterTextChange = () => {
+    clearBtn.hidden = textInput.value.length === 0;
+    refresh();
+  };
+  textInput.addEventListener("input", afterTextChange);
+
+  pasteBtn.addEventListener("click", async () => {
+    try {
+      // Firefox has no readText for pages, and any browser can deny permission.
+      const text = await navigator.clipboard.readText();
+      if (!text) {
+        status.textContent = "Clipboard is empty.";
+        return;
+      }
+      textInput.value = text;
+      afterTextChange();
+      status.textContent = "Pasted from clipboard.";
+    } catch {
+      textInput.focus();
+      status.textContent = "Your browser won't share the clipboard. Press Ctrl+V (or Cmd+V) instead.";
+    }
+  });
+
+  clearBtn.addEventListener("click", () => {
+    textInput.value = "";
+    textInput.focus();
+    afterTextChange();
+  });
+
+  const sources = [
+    [$("src-file"), $("source-file"), "file"],
+    [$("src-text"), $("source-text"), "text"],
+  ];
+  for (const [tab, panel, key] of sources) {
+    tab.addEventListener("click", () => {
+      if (running) return;
+      source = key;
+      for (const [t, p, k] of sources) {
+        t.setAttribute("aria-selected", String(k === key));
+        p.hidden = k !== key;
+      }
+      status.textContent =
+        key === "text" ? "Write something to get started." : "Pick a file to get started.";
+      refresh();
+    });
+  }
 
   const stop = () => {
     running = false;
     stage.hidden = true;
     btn.textContent = "Start transfer";
     fileInput.disabled = false;
+    textInput.disabled = false;
+    pasteBtn.disabled = false;
+    refresh();
   };
 
   btn.addEventListener("click", async () => {
     if (running) return stop();
+
+    // Text rides the same pipeline as a file; only the header flag differs.
+    const isText = source === "text";
     const file = fileInput.files[0];
-    if (!file) return;
+    const raw = isText ? new TextEncoder().encode(textInput.value) : null;
+    if (isText ? raw.length === 0 : !file) return;
+
+    const sourceName = isText ? "message.txt" : file.name;
+    const sourceSize = isText ? raw.length : file.size;
 
     running = true;
     btn.textContent = "Stop";
     fileInput.disabled = true;
+    textInput.disabled = true;
+    pasteBtn.disabled = true;
     status.textContent = "Compressing…";
 
     let comp, blocks, chunkSize, chunkCount, header;
     try {
-      comp = await gzip(await file.arrayBuffer());
+      comp = await gzip(isText ? raw : await file.arrayBuffer());
       chunkSize = Number(document.querySelector('input[name="density"]:checked').value);
       chunkCount = Math.max(1, Math.ceil(comp.length / chunkSize));
       if (chunkCount > MAX_CHUNKS) {
         throw new Error(
-          `${humanSize(file.size)} needs ${chunkCount} frames. Raise QR density or send a smaller file.`
+          `${humanSize(sourceSize)} needs ${chunkCount} frames. Raise QR density or send less.`
         );
       }
       header = buildHeader(
-        sanitiseFilename(file.name),
+        sanitiseFilename(sourceName),
         comp.length,
         chunkCount,
         chunkSize,
-        crc32(comp)
+        crc32(comp),
+        isText
       );
       // Repair symbols XOR whole blocks, so every block must be full width.
       blocks = new Uint8Array(chunkCount * chunkSize);
@@ -387,7 +464,7 @@ function initSend() {
       return stop();
     }
 
-    const compressed = `${humanSize(file.size)} → ${humanSize(comp.length)}, ${chunkCount} frames`;
+    const compressed = `${humanSize(sourceSize)} → ${humanSize(comp.length)}, ${chunkCount} frames`;
     const block = (i) => blocks.subarray(i * chunkSize, (i + 1) * chunkSize);
     let idx = 0; // systematic pass position
     let frameId = 1; // repair symbol id, never reused
@@ -448,6 +525,9 @@ function initReceive() {
   const progress = $("recv-progress");
   const video = $("video");
   const viewfinder = $("viewfinder");
+  const textCard = $("recv-text");
+  const textBody = $("recv-text-body");
+  const copyBtn = $("copy-btn");
   let stream = null;
   let running = false;
 
@@ -498,6 +578,42 @@ function initReceive() {
     btn.textContent = "Start camera";
   };
 
+  const MAX_SHOWN_TEXT = 100_000;
+
+  // The async clipboard API needs a secure context and can be denied outright,
+  // so fall back to the old selection-based copy rather than giving up.
+  const legacyCopy = (text) => {
+    const scratch = document.createElement("textarea");
+    scratch.value = text;
+    scratch.setAttribute("readonly", "");
+    scratch.style.cssText = "position:fixed;top:0;left:0;opacity:0";
+    document.body.append(scratch);
+    scratch.select();
+    scratch.setSelectionRange(0, text.length);
+    let ok = false;
+    try {
+      ok = document.execCommand("copy");
+    } catch {
+      ok = false;
+    }
+    scratch.remove();
+    return ok;
+  };
+
+  copyBtn.addEventListener("click", async () => {
+    const text = textBody.textContent;
+    let ok = false;
+    try {
+      await navigator.clipboard.writeText(text);
+      ok = true;
+    } catch {
+      ok = legacyCopy(text);
+    }
+    copyBtn.textContent = ok ? "Copied" : "Press Ctrl+C to copy";
+    if (!ok) getSelection().selectAllChildren(textBody);
+    setTimeout(() => (copyBtn.textContent = "Copy"), ok ? 2000 : 4000);
+  });
+
   async function finish() {
     status.textContent = "Reassembling…";
     const out = fountain.assemble(meta.compLen);
@@ -510,8 +626,18 @@ function initReceive() {
       return;
     }
     try {
-      download(await gunzipCapped(out), sanitiseFilename(meta.name));
-      status.textContent = `Saved ${sanitiseFilename(meta.name)} — checksum verified.`;
+      const payload = await gunzipCapped(out);
+      const name = sanitiseFilename(meta.name);
+      const text = meta.isText ? new TextDecoder().decode(payload) : null;
+
+      if (text !== null && text.length <= MAX_SHOWN_TEXT) {
+        textBody.textContent = text;
+        textCard.hidden = false;
+        status.textContent = "Message received — checksum verified.";
+      } else {
+        download(payload, name);
+        status.textContent = `Saved ${name} — checksum verified.`;
+      }
     } catch (err) {
       status.textContent = `Decompression failed: ${err.message}`;
     }
@@ -591,6 +717,7 @@ function initReceive() {
     await video.play().catch(() => {});
     running = true;
     btn.textContent = "Stop";
+    textCard.hidden = true;
     status.textContent = "Scanning — point at the sender's screen.";
     reset();
     tick();

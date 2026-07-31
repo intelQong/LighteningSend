@@ -19,12 +19,25 @@ for (const index of [0, 1, 65535]) {
 const h = parseFrame(buildHeader("réçu ⚡.tar.gz", 123456, 999, 768, 0xdeadbeef));
 assert.deepEqual(h, {
   kind: "header",
+  isText: false,
   name: "réçu ⚡.tar.gz",
   compLen: 123456,
   chunkCount: 999,
   chunkSize: 768,
   fileCrc: 0xdeadbeef,
 });
+
+// The text flag must survive the round trip — it decides show vs. save.
+assert.equal(parseFrame(buildHeader("message.txt", 40, 1, 768, 1, true)).isText, true);
+assert.equal(parseFrame(buildHeader("message.txt", 40, 1, 768, 1, false)).isText, false);
+
+// A flipped bit anywhere in a header, flag byte included, must be rejected.
+const hdr = buildHeader("note.txt", 40, 1, 768, 0x1234, true);
+for (let i = 0; i < hdr.length; i++) {
+  const bad = hdr.slice();
+  bad[i] ^= 0x01;
+  assert.equal(parseFrame(bad), null, `header bit flip at byte ${i} slipped through`);
+}
 
 // Any single-bit flip must be rejected, not silently accepted.
 const good = buildData(42, Uint8Array.from([1, 2, 3, 250, 251, 252]));
