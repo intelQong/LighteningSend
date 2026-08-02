@@ -306,6 +306,11 @@ export class Fountain {
 
 const $ = (id) => document.getElementById(id);
 
+// Module-sized buffer the QR is drawn into before being scaled up. Created on
+// first use so this module still imports under Node for the protocol tests.
+let scratch = null;
+let sctx = null;
+
 function drawQR(canvas, frame) {
   // Error correction M, not L. The CRC only *detects* a bad read; the QR's own
   // error correction is what lets a frame decode at all through blur and glare.
@@ -324,17 +329,32 @@ function drawQR(canvas, frame) {
   const size = (count + quiet * 2) * scale;
 
   if (canvas.width !== size) (canvas.width = size), (canvas.height = size);
-  const ctx = canvas.getContext("2d");
-  ctx.fillStyle = "#fff";
-  ctx.fillRect(0, 0, size, size);
-  ctx.fillStyle = "#000";
+
+  // Paint one pixel per module, then blit it up with smoothing off. A fillRect
+  // per module measured 2.03 ms against 0.17 ms for this on a v15 code, and
+  // this runs for every frame the sender shows.
+  const side = count + quiet * 2;
+  if (!scratch) {
+    scratch = document.createElement("canvas");
+    sctx = scratch.getContext("2d", { willReadFrequently: true });
+  }
+  if (scratch.width !== side) (scratch.width = side), (scratch.height = side);
+  const img = sctx.createImageData(side, side);
+  const d = img.data;
+  d.fill(255);
   for (let r = 0; r < count; r++) {
     for (let c = 0; c < count; c++) {
       if (qr.isDark(r, c)) {
-        ctx.fillRect((c + quiet) * scale, (r + quiet) * scale, scale, scale);
+        const o = ((r + quiet) * side + (c + quiet)) * 4;
+        d[o] = d[o + 1] = d[o + 2] = 0;
       }
     }
   }
+  sctx.putImageData(img, 0, 0);
+
+  const ctx = canvas.getContext("2d");
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(scratch, 0, 0, size, size);
 }
 
 function initSend() {
@@ -561,26 +581,42 @@ function initReceive() {
     framesSeen = 0;
     bar.style.width = "0%";
     map.width = 1;
+    cols = 0;
+    painted = new Set();
     progress.hidden = true;
   };
 
-  const paintMap = () => {
+  // Repainting every block on every decoded frame is O(blocks) per frame and
+  // measured 1.3 ms at 2000 blocks. Peeling can solve several blocks at once,
+  // so redraw only the ones that actually changed.
+  let cols = 0;
+  let cell = 0;
+  let painted = new Set();
+
+  const paintMap = (full = false) => {
     if (!meta) return;
     progress.hidden = false;
-    const cols = Math.ceil(Math.sqrt(meta.chunkCount));
-    const rows = Math.ceil(meta.chunkCount / cols);
-    const cell = Math.max(2, Math.floor(360 / cols));
-    if (map.width !== cols * cell) {
-      map.width = cols * cell;
-      map.height = rows * cell;
-    }
     const ctx = map.getContext("2d");
     const css = getComputedStyle(document.documentElement);
     const on = css.getPropertyValue("--received");
     const off = css.getPropertyValue("--pending");
-    ctx.clearRect(0, 0, map.width, map.height);
-    for (let i = 0; i < meta.chunkCount; i++) {
-      ctx.fillStyle = fountain.solved.has(i) ? on : off;
+
+    if (full || !cols) {
+      cols = Math.ceil(Math.sqrt(meta.chunkCount));
+      cell = Math.max(2, Math.floor(360 / cols));
+      map.width = cols * cell;
+      map.height = Math.ceil(meta.chunkCount / cols) * cell;
+      painted = new Set();
+      ctx.fillStyle = off;
+      for (let i = 0; i < meta.chunkCount; i++) {
+        ctx.fillRect((i % cols) * cell, Math.floor(i / cols) * cell, cell - 1, cell - 1);
+      }
+    }
+
+    ctx.fillStyle = on;
+    for (const i of fountain.solved.keys()) {
+      if (painted.has(i)) continue;
+      painted.add(i);
       ctx.fillRect((i % cols) * cell, Math.floor(i / cols) * cell, cell - 1, cell - 1);
     }
     bar.style.width = `${(fountain.solved.size / meta.chunkCount) * 100}%`;
@@ -639,7 +675,7 @@ function initReceive() {
       // transfers got mixed. Keep the metadata, drop the payload, resync.
       status.textContent = "Checksum mismatch — frames from two transfers mixed. Restarting.";
       fountain = new Fountain(meta.chunkCount, meta.chunkSize);
-      paintMap();
+      paintMap(true);
       return;
     }
     try {
@@ -684,8 +720,11 @@ function initReceive() {
           if (frame.kind === "header") {
             if (meta && meta.fileCrc !== frame.fileCrc) reset(); // new transfer started
             meta = frame;
+            // Metadata repeats every few frames; only rebuild the grid when the
+            // transfer is actually new, not on every repeat.
+            const fresh = !fountain;
             fountain ??= new Fountain(frame.chunkCount, frame.chunkSize);
-            paintMap();
+            paintMap(fresh);
           } else if (!meta) {
             // Metadata hasn't arrived yet; it repeats every few frames.
             continue;

@@ -1,0 +1,60 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>bench2</title></head><body>
+<pre id="out" style="font:13px monospace"></pre>
+<script src="vendor/qrcode.js"></script>
+<script type="module">
+import { buildData } from "./app.js";
+const out=document.getElementById("out"), log=l=>out.textContent+=l+"\n";
+const N=60;
+const bench=f=>{f();const t=performance.now();for(let i=0;i<N;i++)f();return (performance.now()-t)/N;};
+function latin1(b){let s="";for(let i=0;i<b.length;i+=4096)s+=String.fromCharCode.apply(null,b.subarray(i,i+4096));return s;}
+
+const frame=buildData(1,Uint8Array.from({length:384},(_,i)=>i&0xff));
+const qr=qrcode(0,"M");qr.addData(latin1(frame),"Byte");qr.make();
+const count=qr.getModuleCount(),quiet=4,scale=4,size=(count+quiet*2)*scale;
+const c=document.createElement("canvas");c.width=c.height=size;document.body.append(c);
+const ctx=c.getContext("2d");
+
+log(`QR v${(count-17)/4}, ${count} modules, ${size}px canvas\n`);
+
+// current: fillRect per dark module
+log("drawQR body:");
+log(`  fillRect per module   ${bench(()=>{
+  ctx.fillStyle="#fff";ctx.fillRect(0,0,size,size);ctx.fillStyle="#000";
+  for(let r=0;r<count;r++)for(let col=0;col<count;col++)
+    if(qr.isDark(r,col))ctx.fillRect((col+quiet)*scale,(r+quiet)*scale,scale,scale);
+}).toFixed(2)} ms`);
+
+// candidate: build 1px-per-module ImageData, then scale up with drawImage
+const small=document.createElement("canvas");small.width=small.height=count+quiet*2;
+const sctx=small.getContext("2d");
+log(`  ImageData + drawImage ${bench(()=>{
+  const img=sctx.createImageData(small.width,small.height);
+  const d=img.data;d.fill(255);
+  for(let r=0;r<count;r++)for(let col=0;col<count;col++)
+    if(qr.isDark(r,col)){const o=((r+quiet)*small.width+(col+quiet))*4;d[o]=d[o+1]=d[o+2]=0;}
+  sctx.putImageData(img,0,0);
+  ctx.imageSmoothingEnabled=false;
+  ctx.drawImage(small,0,0,size,size);
+}).toFixed(2)} ms`);
+
+// candidate: single Path2D of all dark modules
+log(`  one Path2D            ${bench(()=>{
+  ctx.fillStyle="#fff";ctx.fillRect(0,0,size,size);
+  const p=new Path2D();
+  for(let r=0;r<count;r++)for(let col=0;col<count;col++)
+    if(qr.isDark(r,col))p.rect((col+quiet)*scale,(r+quiet)*scale,scale,scale);
+  ctx.fillStyle="#000";ctx.fill(p);
+}).toFixed(2)} ms`);
+
+log("\nlayout / style reads in the hot loop:");
+log(`  getBoundingClientRect ${bench(()=>c.parentElement.getBoundingClientRect().width).toFixed(3)} ms`);
+log(`  getComputedStyle+prop ${bench(()=>{const s=getComputedStyle(document.documentElement);return s.getPropertyValue("--received")+s.getPropertyValue("--pending");}).toFixed(3)} ms`);
+
+// paintMap full redraw vs single-cell
+const m=document.createElement("canvas");m.width=m.height=360;const mx=m.getContext("2d");
+const K=2000,cols=Math.ceil(Math.sqrt(K)),cell=Math.max(2,Math.floor(360/cols));
+log(`\nmosaic, ${K} blocks:`);
+log(`  full redraw           ${bench(()=>{for(let i=0;i<K;i++){mx.fillStyle=i%2?"#0b57d0":"#d5dade";mx.fillRect((i%cols)*cell,((i/cols)|0)*cell,cell-1,cell-1);}}).toFixed(3)} ms`);
+log(`  one cell              ${bench(()=>{mx.fillStyle="#0b57d0";mx.fillRect(0,0,cell-1,cell-1);}).toFixed(3)} ms`);
+document.title="done";
+</script></body></html>
