@@ -316,6 +316,7 @@ const $ = (id) => document.getElementById(id);
 // first use so this module still imports under Node for the protocol tests.
 let scratch = null;
 let sctx = null;
+let scratchImg = null;
 
 // Picking the best of the 8 QR mask patterns costs 8 extra grid builds and 8
 // penalty scans: 21.0 ms to encode a v19 frame against 3.8 ms with the mask
@@ -327,7 +328,12 @@ let sctx = null;
 // cannot start without, and the only one whose bytes aren't gzip output.
 const DATA_MASK = 7;
 
-function drawQR(canvas, frame) {
+// cssPx is the width the canvas occupies on screen, which CSS owns and which
+// stays put for the whole transfer. All this picks is the backing resolution:
+// a whole number of pixels per module, at least as many as the display needs,
+// so the browser only ever scales the bitmap down and never resamples a module
+// into an uneven number of pixels.
+function drawQR(canvas, frame, cssPx) {
   // Error correction M, not L. The CRC only *detects* a bad read; the QR's own
   // error correction is what lets a frame decode at all through blur and glare.
   const qr = qrcode(0, "M");
@@ -336,27 +342,23 @@ function drawQR(canvas, frame) {
 
   const count = qr.getModuleCount();
   const quiet = 4;
-  // In fullscreen the QR gets the whole screen; inline it shares the page.
-  const box = canvas.parentElement.getBoundingClientRect();
-  const target = document.fullscreenElement
-    ? Math.min(window.innerWidth, window.innerHeight) * 0.96
-    : Math.min(box.width || window.innerWidth, window.innerHeight * 0.7) * 0.98;
-  const scale = Math.max(2, Math.floor(target / (count + quiet * 2)));
-  const size = (count + quiet * 2) * scale;
+  const side = count + quiet * 2;
+  const scale = Math.max(2, Math.ceil((cssPx * (window.devicePixelRatio || 1)) / side));
+  const size = side * scale;
 
   if (canvas.width !== size) (canvas.width = size), (canvas.height = size);
 
-  // Paint one pixel per module, then blit it up with smoothing off. A fillRect
-  // per module measured 2.03 ms against 0.17 ms for this on a v15 code, and
-  // this runs for every frame the sender shows.
-  const side = count + quiet * 2;
+  // Paint one pixel per module, then blit it up. A fillRect per module measured
+  // 2.03 ms against 0.17 ms for this on a v15 code, and this runs for every
+  // frame the sender shows. The ImageData is reused across frames of the same
+  // QR version — it is ~40 kB, and a transfer allocates one per frame otherwise.
   if (!scratch) {
     scratch = document.createElement("canvas");
     sctx = scratch.getContext("2d", { willReadFrequently: true });
   }
   if (scratch.width !== side) (scratch.width = side), (scratch.height = side);
-  const img = sctx.createImageData(side, side);
-  const d = img.data;
+  if (!scratchImg || scratchImg.width !== side) scratchImg = sctx.createImageData(side, side);
+  const d = scratchImg.data;
   d.fill(255);
   for (let r = 0; r < count; r++) {
     for (let c = 0; c < count; c++) {
@@ -366,7 +368,7 @@ function drawQR(canvas, frame) {
       }
     }
   }
-  sctx.putImageData(img, 0, 0);
+  sctx.putImageData(scratchImg, 0, 0);
 
   const ctx = canvas.getContext("2d");
   ctx.imageSmoothingEnabled = false;
@@ -386,16 +388,26 @@ function initSend() {
   const fpsOut = $("fps-out");
   let running = false;
 
+  // CSS owns how big the code is on screen; this reads back what it decided so
+  // the backing store can be sized to match. Only the layout can change it, so
+  // it is read once per transfer and again whenever the layout moves.
+  let cssPx = 320;
+  const measure = () => Math.round(canvas.getBoundingClientRect().width) || cssPx;
+
   fps.addEventListener("input", () => (fpsOut.value = fps.value));
 
   fullBtn.addEventListener("click", () => {
     if (document.fullscreenElement) document.exitFullscreen();
     else stage.requestFullscreen?.().catch(() => {});
   });
-  // Fullscreen changes the space available, so the next frame must be resized.
+  // Fullscreen and window resizes change the space available, so the backing
+  // store has to be re-measured — but only then, never per frame.
+  const remeasure = () => running && (cssPx = measure());
   document.addEventListener("fullscreenchange", () => {
     fullBtn.textContent = document.fullscreenElement ? "Exit full screen" : "Full screen";
+    remeasure();
   });
+  window.addEventListener("resize", remeasure);
 
   // Which source is active is owned by the File/Text switch below.
   let source = "file";
@@ -523,6 +535,12 @@ function initSend() {
     let frameId = 1; // repair symbol id, never reused
     let sinceHeader = HEADER_EVERY; // send metadata first
 
+    // The stage has to be on screen before the first frame is drawn: while it
+    // was hidden the canvas measured 0 wide, the old code fell back to the whole
+    // window, and frame one came out visibly bigger than every frame after it.
+    stage.hidden = false;
+    cssPx = measure();
+
     // Pass 1 is systematic (every block once). After that, repair symbols
     // forever — the receiver can finish on any k(1+ε) of them.
     let due = performance.now();
@@ -547,8 +565,7 @@ function initSend() {
         frameId++;
       }
       try {
-        drawQR(canvas, frame);
-        stage.hidden = false;
+        drawQR(canvas, frame, cssPx);
       } catch (err) {
         status.textContent = `QR encode failed: ${err.message}. Lower the QR density.`;
         return stop();
