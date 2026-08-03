@@ -23,7 +23,13 @@ const HDR = 0x48; // 'H'
 const DAT = 0x44; // 'D'
 const REP = 0x52; // 'R'
 const HEADER_EVERY = 16; // re-broadcast metadata this often, so a late receiver catches up
-const SCAN_MAX = 960; // longest edge of the buffer handed to zbar; see bench.html
+
+// Longest edge of the buffer handed to zbar. Scanning is the receiver's whole
+// per-frame cost — 19 ms at 768 px against 34.5 ms at 960 — and it is what caps
+// frames per second, so it is throughput. Handing zbar *more* pixels than this
+// does not decode more: measured across 64 to 1536 byte chunks and holds from
+// close to a shaky 60% fill, 1120 and 1600 px were never better and often worse.
+const SCAN_MAX = 768;
 
 // ---------------------------------------------------------------- utilities
 
@@ -311,12 +317,22 @@ const $ = (id) => document.getElementById(id);
 let scratch = null;
 let sctx = null;
 
+// Picking the best of the 8 QR mask patterns costs 8 extra grid builds and 8
+// penalty scans: 21.0 ms to encode a v19 frame against 3.8 ms with the mask
+// fixed. That ran on the main thread for every frame shown, which is what
+// really capped the sender. Measured over 40 simulated holds at 576 B, every
+// fixed mask decoded as well as the search or better — the penalty heuristic
+// is tuned for structured input, and gzip output is noise. 7 was the best of
+// them. The search stays on for the header: it is the one frame the receiver
+// cannot start without, and the only one whose bytes aren't gzip output.
+const DATA_MASK = 7;
+
 function drawQR(canvas, frame) {
   // Error correction M, not L. The CRC only *detects* a bad read; the QR's own
   // error correction is what lets a frame decode at all through blur and glare.
   const qr = qrcode(0, "M");
   qr.addData(bytesToLatin1(frame), "Byte");
-  qr.make();
+  qr.make(frame[0] === HDR ? undefined : DATA_MASK);
 
   const count = qr.getModuleCount();
   const quiet = 4;
@@ -509,6 +525,7 @@ function initSend() {
 
     // Pass 1 is systematic (every block once). After that, repair symbols
     // forever — the receiver can finish on any k(1+ε) of them.
+    let due = performance.now();
     while (running) {
       let frame, label;
       if (sinceHeader >= HEADER_EVERY) {
@@ -537,7 +554,13 @@ function initSend() {
         return stop();
       }
       status.textContent = `${compressed} · ${label}`;
-      await new Promise((r) => setTimeout(r, 1000 / Number(fps.value)));
+      // Sleep to the next deadline rather than for a fixed period: encoding a
+      // dense QR costs several ms, and paying it on top of the period made the
+      // real frame rate fall short of the one the user picked.
+      due += 1000 / Number(fps.value);
+      const wait = due - performance.now();
+      if (wait < -500) due = performance.now(); // fell far behind; don't burst
+      await new Promise((r) => setTimeout(r, Math.max(0, wait)));
     }
     status.textContent = `Stopped. ${compressed}`;
   });
@@ -704,9 +727,6 @@ function initReceive() {
       const w = video.videoWidth;
       const h = video.videoHeight;
       if (w && h) {
-        // 960 px is where decode rate stops improving: measured identical to
-        // 1600 in every camera condition, at 2.6x less work per frame. Scan cost
-        // is what caps frames per second on a phone, so this is throughput.
         const s = Math.min(1, SCAN_MAX / Math.max(w, h));
         const sw = Math.round(w * s);
         const sh = Math.round(h * s);

@@ -7,14 +7,20 @@ This is a fork of [mohankumarelec/airgapped-qr-code-transfer](https://github.com
 ## What's been improved
 
 ### Real-camera reliability
-- **Frames now actually decode through a camera.** The old 768-byte default produced a version-22 QR that a phone could not resolve (≈3 px per module at arm's length), and error correction had been dropped to L on the mistaken theory that the CRC was enough. Error correction is back to **M**, and the default chunk is **384 bytes**.
-- **Honest density ladder** labelled by cost, not size: **Safest 64 / Balanced 384 / Fast 768 / Fastest 1280**. Safest is the only size that still decodes 100% from a distant, shaky 720p camera view; Fast and Fastest need the camera closer. Measured with `camera-sim.html`, which simulates a real camera — scaled, blurred, tilted, noised.
+- **Frames now actually decode through a camera.** The old 768-byte default produced a version-22 QR that a phone could not resolve (≈3 px per module at arm's length), and error correction had been dropped to L on the mistaken theory that the CRC was enough. Error correction is back to **M**, and the default chunk is **576 bytes** (was 384 — see below).
+- **Honest density ladder** labelled by cost, not size: **Safest 64 / Balanced 576 / Fast 1024 / Fastest 1536**. Safest is the only size that still decodes 100% from a distant, shaky 720p camera view; Fast and Fastest need the camera closer. Measured with `npm run sim`, which simulates a real camera headlessly — scaled, blurred, tilted, noised — and decodes with the same zbar build the receiver uses.
 - **CRC on every data frame** drops bad camera reads instead of accepting them; the whole compressed stream carries its own CRC too, checked before the file is written.
 
 ### Faster receiving
-- **Scan buffer shrunk 1600 → 960 px**: decode accuracy unchanged at every distance, but scan cost drops 59.7 → 22.9 ms per frame. Measured end-to-end: **13 → 34 decodes/s (2.65x)** on a replayed camera frame. On a phone (several times slower than a desktop) the old buffer put the receiver below the sender's frame rate, so most frames were never looked at.
+- **Scan buffer shrunk 1600 → 960 → 768 px**: scan cost is the receiver's whole per-frame budget, and it is what caps frames per second. 34.5 ms at 960 px against **19.0 ms at 768 px**. Handing zbar more pixels than that does not decode more — swept 64 to 1536 byte chunks against holds from close to a shaky 60% fill, 1120 and 1600 px were never better and often worse, because zbar's binariser prefers moderate resolution to raw pixels.
+- **Balanced density raised 384 → 576 bytes**, worth a flat 1.5x. The two sizes are equally robust: both decode 100% from close and arm's length, both survive a 60%-fill shaky hold, and both fail together at a distant 45% fill (where only Safest works). 384 was simply leaving bytes on the table.
+- **Tiling several small QRs per frame was measured and rejected.** It looks like free parallelism — zbar returns every symbol in one scan — but the screen has a fixed module budget, and each tile pays its own 4-module quiet zone. A 2x2 grid of 384 B beat one 768 B code only in the easiest hold and collapsed to zero in every difficult one.
 - **Full screen button** hands the QR the entire display — density is limited by pixels-per-module at the camera, and the code used to be confined to the 640 px reading column. This is what makes Fast and Fastest usable: at arm's length even 2048 B decodes 100% once the code is big enough.
-- **Default 8 → 12 fps, ceiling 20 → 24 fps**, now that the receiver can keep up.
+- **Default 12 → 15 fps, ceiling 24 → 30 fps**, now that a scan costs 19 ms and an encode 3.8 ms. Dropped frames cost nothing to a fountain code — there is no retransmit to wait for — so overshooting the receiver is cheaper than undershooting it.
+
+### Faster sending
+- **QR encoding is 5.5x cheaper: 21.0 → 3.8 ms per frame.** qrcode-generator builds the grid nine times — once per mask pattern to score it, once for real — and that ran on the main thread for every frame displayed. It was the sender's true ceiling: 21 ms per encode is ~43 fps on a desktop and well under 15 fps on a phone, so the frame rate on the slider was fiction. The mask is now fixed for data frames (`vendor/qrcode.js` is patched to accept one). Over 40 simulated holds at 576 B, every one of the 8 fixed masks decoded as well as the spec's search or better — the penalty heuristic is tuned for structured input, and gzip output is noise. The search is kept for header frames, which are structured and which the receiver cannot start without.
+- **The sender paces to a deadline, not a delay.** `setTimeout(1000/fps)` slept *after* encoding, so the real period was the frame time plus a 21 ms encode: 12 fps on the slider was ~9.6 fps in fact. Now measured at exactly 15.0 fps requested-and-delivered, and 30.0 fps sustained at the new ceiling.
 
 ### Cheaper rendering
 - **QR draw is 12x cheaper**: one `fillRect` per dark module cost 2.03 ms on a version-15 code; painting one pixel per module into `ImageData` and blitting with smoothing off costs 0.17 ms — on every frame shown. The blit is pixel-exact and still decodes 10/10 through a blurred, tilted camera view (`bench2.html`).
@@ -79,8 +85,8 @@ Camera access requires HTTPS (or `localhost`).
 - `build.mjs` — minifies into `dist/` for deploy; the unbuilt repo still runs as-is
 - `test.mjs` — protocol and fountain self-check: `npm test`
 - `test.html` — QR encode/decode round-trip check; serve the directory and open it in a browser
-- `camera-sim.html` — decode-rate bench through a simulated camera (scaled, blurred, tilted, noised)
-- `bench.html` — decode-rate vs scan-buffer-size bench
+- `sim.mjs` — headless camera simulation (scaled, blurred, tilted, noised): bytes recovered per frame and scan cost per density and scan-buffer size, `npm run sim`
+- `bench.html` — in-browser decode-rate vs scan-buffer-size bench
 - `bench2.html` — per-frame render-cost bench on both ends
 
 ## Deployment

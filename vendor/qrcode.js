@@ -421,7 +421,11 @@ var qrcode = function() {
       return _moduleCount;
     };
 
-    _this.make = function() {
+    // LOCAL PATCH: make(maskPattern) skips the mask search when given a pattern.
+    // Choosing the best of 8 masks costs 8 extra full grid builds plus 8 penalty
+    // scans — 18 of the 21 ms this call takes on a v19 code — and we re-encode a
+    // new frame 15 times a second. See readme.
+    _this.make = function(maskPattern) {
       if (_typeNumber < 1) {
         var typeNumber = 1;
 
@@ -449,7 +453,7 @@ var qrcode = function() {
         _typeNumber = typeNumber;
       }
 
-      makeImpl(false, getBestMaskPattern() );
+      makeImpl(false, maskPattern === undefined ? getBestMaskPattern() : maskPattern);
     };
 
     _this.createTableTag = function(cellSize, margin) {
