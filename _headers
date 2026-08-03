@@ -9,4 +9,9 @@
   Strict-Transport-Security: max-age=63072000; includeSubDomains
 
 /vendor/*
-  Cache-Control: public, max-age=31536000, immutable
+  # Cached hard, but NOT immutable: these are stable, unversioned paths, and a
+  # vendored file does get patched (qrcode.js carries a local change). immutable
+  # promises the bytes at a URL never change, so an edge or browser that held a
+  # copy would serve the stale one for the full year and never ask again — which
+  # is exactly what happened on the custom domain. Revalidation is a 304.
+  Cache-Control: public, max-age=86400, stale-while-revalidate=604800

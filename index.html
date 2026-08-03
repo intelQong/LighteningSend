@@ -131,7 +131,10 @@
       <a href="https://github.com/intelQong/LighteningSend">Source</a>
     </footer>
 
-    <script src="vendor/qrcode.js"></script>
+    <!-- ?v=2 is a cache bust, not decoration: this file was published for a year
+         as immutable, so every cache holding the pre-patch copy needs a new URL
+         to look at. Bump it whenever a vendored file changes. -->
+    <script src="vendor/qrcode.js?v=2"></script>
     <script type="module" src="app.js"></script>
   </body>
 </html>
