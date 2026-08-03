@@ -1,8 +1,8 @@
 # LighteningSend
 
-Transfer files between two devices with no network, using animated QR codes: one screen displays them, the other's camera reads them.
+Transfer files between two devices with no network. One screen plays a stream of animated QR codes; the other's camera reads them. No Wi-Fi, no Bluetooth, no servers — works anywhere, air-gapped or offline, out of a single HTML file you can carry on a USB stick.
 
-This is a fork of [mohankumarelec/airgapped-qr-code-transfer](https://github.com/mohankumarelec/airgapped-qr-code-transfer), rewritten with zero third-party CDNs, native gzip streams instead of pako, raw binary QR frames, and CRC32-checked transfers.
+Files (or text: Wi-Fi passwords, SSH keys) are gzipped with the browser-native `CompressionStream`, split into CRC-checked chunks, and broadcast as raw-binary QR frames. A fountain code means frames arrive in any order, a missed one never comes round again, and there are no retransmits — just point a camera at a screen and the file reassembles itself.
 
 ## What's been improved
 
@@ -110,6 +110,5 @@ MIT — see [LICENSE](LICENSE).
 
 ## Credits
 
-- [mohankumarelec/airgapped-qr-code-transfer](https://github.com/mohankumarelec/airgapped-qr-code-transfer) — upstream project this was forked from.
 - [qrcode-generator](https://github.com/kazuhikoarase/qrcode-generator) — MIT License.
 - [@undecaf/zbar-wasm](https://github.com/undecaf/zbar-wasm) — LGPL-2.1 License.
